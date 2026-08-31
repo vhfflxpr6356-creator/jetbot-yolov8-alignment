@@ -1,13 +1,57 @@
-SmartTrafficDashboard UI-only prototype
+# WPF Smart Traffic Dashboard
 
-Target: WPF App (.NET Framework 4.8)
-Purpose: layout/design only. No CCTV, WebSocket, MVVM, data binding, timer, or signal-control functionality is connected yet.
+AI 스마트 교통 신호 시스템의 실시간 관제용 WPF 대시보드입니다.
 
-Layout
-- 16:9 horizontal dashboard
-- Large LIVE CCTV panel
-- Traffic status: vehicle count + congestion
-- Signal/emergency: current signal + emergency vehicle + transition reason
-- Bottom event log area designed for vertical accumulation
+Python 기반 차량 탐지 및 교통 분석 결과를 모니터링하고,
+차량 수, 혼잡 상태, 긴급차량 감지 여부 및 신호 상태를
+하나의 화면에서 확인할 수 있도록 구성합니다.
 
-Open SmartTrafficDashboard.sln in Visual Studio 2022.
+## 개발 환경
+
+- C#
+- WPF
+- .NET Framework 4.8
+- Visual Studio 2022
+
+## 주요 화면 구성
+
+### 실시간 CCTV
+- CCTV 영상 표시
+- 차량 객체 탐지 결과 표시
+- 교통 분석 ROI 표시
+
+### 교통 상태
+- ROI 내 차량 수
+- 교통 혼잡 상태
+
+### 신호 및 긴급차량 상태
+- 현재 교통 신호
+- 긴급차량 감지 여부
+- 신호 전환 사유
+
+### 이벤트 로그
+- 차량 감지
+- 혼잡 상태 변경
+- 긴급차량 감지
+- 교통 신호 변경 등의 이벤트를 시간순으로 표시
+
+## 현재 구현 상태
+
+현재 WPF 대시보드의 UI 구조 및 화면 배치를 구현한 상태입니다.
+
+실시간 CCTV 영상, 차량 탐지 데이터, 교통 신호 상태 등의
+실제 데이터 연동은 추후 진행할 예정입니다.
+
+## 향후 구현
+
+- WPF MVVM 구조 적용
+- Data Binding 적용
+- 실시간 CCTV 영상 연동
+- 차량 수 및 혼잡 상태 연동
+- 긴급차량 감지 상태 연동
+- 교통 신호 상태 연동
+- 이벤트 로그 실시간 출력
+
+## 실행
+
+`SmartTrafficDashboard.sln` 파일을 Visual Studio 2022에서 실행합니다.
