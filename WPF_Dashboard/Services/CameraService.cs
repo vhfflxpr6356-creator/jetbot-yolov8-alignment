@@ -1,6 +1,7 @@
 ﻿using OpenCvSharp;
 using OpenCvSharp.WpfExtensions;
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Media.Imaging;
@@ -18,17 +19,75 @@ namespace SmartTrafficDashboard.Services
 
         public bool IsRunning { get; private set; }
 
+        public int ActiveCameraIndex { get; private set; } = -1;
+
+        public string ActiveBackend { get; private set; } = string.Empty;
+
         public bool Start(int cameraIndex = 0)
         {
             if (IsRunning)
                 return true;
 
-            _capture = new VideoCapture(cameraIndex);
-
-            if (!_capture.IsOpened())
+            // USB 연결 순서에 따라 카메라 번호가 달라지므로 자동 탐색한다.
+            var cameraIndices = new List<int> { cameraIndex };
+            for (int index = 0; index < 5; index++)
             {
-                _capture.Dispose();
-                _capture = null;
+                if (!cameraIndices.Contains(index))
+                    cameraIndices.Add(index);
+            }
+
+            VideoCaptureAPIs[] backends =
+            {
+                VideoCaptureAPIs.DSHOW,
+                VideoCaptureAPIs.MSMF,
+                VideoCaptureAPIs.ANY
+            };
+
+            foreach (int index in cameraIndices)
+            {
+                foreach (VideoCaptureAPIs backend in backends)
+                {
+                    var candidate = new VideoCapture(index, backend);
+
+                    bool frameAvailable = false;
+
+                    if (candidate.IsOpened())
+                    {
+                        using (var probeFrame = new Mat())
+                        {
+                            // 일부 USB 카메라는 처음 몇 프레임이 비어 있을 수 있다.
+                            for (int attempt = 0; attempt < 10; attempt++)
+                            {
+                                if (candidate.Read(probeFrame) && !probeFrame.Empty())
+                                {
+                                    frameAvailable = true;
+                                    break;
+                                }
+
+                                Thread.Sleep(50);
+                            }
+                        }
+                    }
+
+                    if (frameAvailable)
+                    {
+                        _capture = candidate;
+                        ActiveCameraIndex = index;
+                        ActiveBackend = backend.ToString();
+                        break;
+                    }
+
+                    candidate.Dispose();
+                }
+
+                if (_capture != null)
+                    break;
+            }
+
+            if (_capture == null)
+            {
+                ActiveCameraIndex = -1;
+                ActiveBackend = string.Empty;
                 return false;
             }
 
@@ -88,6 +147,9 @@ namespace SmartTrafficDashboard.Services
             _capture?.Dispose();
 
             _capture = null;
+
+            ActiveCameraIndex = -1;
+            ActiveBackend = string.Empty;
 
             _cancellationTokenSource?.Dispose();
             _cancellationTokenSource = null;

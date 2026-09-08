@@ -10,6 +10,8 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using System.Configuration;
+using System.Threading.Tasks;
 
 namespace SmartTrafficDashboard.ViewModels
 {
@@ -24,6 +26,7 @@ namespace SmartTrafficDashboard.ViewModels
             "FPS --";
         private readonly CameraService _cameraService;
         private readonly YoloService _yoloService;
+        private readonly Esp32SignalService _esp32SignalService;
         private readonly DispatcherTimer _clockTimer;
 
         private bool _isInferencing = false;
@@ -31,6 +34,23 @@ namespace SmartTrafficDashboard.ViewModels
 
         // 이전 Ambulance 감지 상태
         private bool _wasAmbulanceDetected = false;
+        private bool _isAutoControlEnabled = true;
+        private bool _isEsp32Busy = false;
+        private bool _automaticSendLoopRunning = false;
+        private SignalState _desiredAutomaticSignal = SignalState.Red;
+        private bool _stableCongestion = false;
+        private bool _pendingCongestionState = false;
+        private DateTime _congestionCandidateSince = DateTime.MinValue;
+        private DateTime _lastAmbulanceDetectedAt = DateTime.MinValue;
+
+        private static readonly TimeSpan CongestionEnterDelay =
+            TimeSpan.FromSeconds(1.5);
+
+        private static readonly TimeSpan CongestionExitDelay =
+            TimeSpan.FromSeconds(2.5);
+
+        private static readonly TimeSpan EmergencyHoldDuration =
+            TimeSpan.FromSeconds(3);
 
 
         // =========================================================
@@ -99,6 +119,21 @@ namespace SmartTrafficDashboard.ViewModels
         private Brush _emergencyStatusColor =
             Brushes.Green;
 
+        private Brush _trafficStatusColor =
+            Brushes.Gray;
+
+        private Brush _esp32StatusColor =
+            Brushes.Gray;
+
+        private string _esp32Status =
+            "연결 확인 필요";
+
+        private string _lastEsp32Command =
+            "RED";
+
+        private string _controlMode =
+            "AUTO";
+
         public string FpsText
         {
             get => _fpsText;
@@ -120,6 +155,16 @@ namespace SmartTrafficDashboard.ViewModels
 
             _yoloService =
                 new YoloService();
+
+            string esp32BaseUrl =
+                ConfigurationManager.AppSettings["Esp32BaseUrl"];
+
+            _esp32SignalService =
+                new Esp32SignalService(
+                    string.IsNullOrWhiteSpace(esp32BaseUrl)
+                        ? "http://192.168.0.162"
+                        : esp32BaseUrl
+                );
 
 
             _cameraService.MatFrameReceived +=
@@ -610,6 +655,15 @@ namespace SmartTrafficDashboard.ViewModels
                 VideoInputStatus =
                     "카메라 연결 실패";
             }
+            else
+            {
+                VideoInputStatus =
+                    "카메라 " +
+                    _cameraService.ActiveCameraIndex +
+                    " 연결됨 (" +
+                    _cameraService.ActiveBackend +
+                    ")";
+            }
         }
 
 
@@ -623,6 +677,8 @@ namespace SmartTrafficDashboard.ViewModels
             _cameraService?.Stop();
 
             _yoloService?.Dispose();
+
+            _esp32SignalService?.Dispose();
 
 
             SystemStatus =
@@ -643,6 +699,298 @@ namespace SmartTrafficDashboard.ViewModels
 
             VideoInputStatus =
                 "카메라 연결 종료";
+        }
+
+
+        // =========================================================
+        // ESP32 수동/자동 신호 제어
+        // =========================================================
+        public async Task CheckEsp32ConnectionAsync()
+        {
+            Esp32Status = "연결 확인 중";
+            Esp32StatusColor = Brushes.Orange;
+
+            Esp32CommandResult result =
+                await _esp32SignalService.CheckConnectionAsync();
+
+            UpdateEsp32ConnectionState(result);
+            AddEventLog("ESP32", result.Message);
+        }
+
+        public async Task SendManualSignalAsync(
+            SignalState state)
+        {
+            IsAutoControlEnabled = false;
+            ControlMode = "MANUAL";
+
+            await SendSignalWithTransitionAsync(
+                state,
+                "수동 제어",
+                false
+            );
+        }
+
+        public void EnableAutomaticControl()
+        {
+            IsAutoControlEnabled = true;
+            ControlMode = "AUTO";
+            SignalChangeReason = "ROI 자동 제어";
+            QueueAutomaticSignal(_desiredAutomaticSignal);
+            AddEventLog("MODE", "ROI 자동 제어 활성화");
+        }
+
+        private void UpdateTrafficAndQueueSignal(
+            int vehicleCount,
+            bool ambulanceDetected)
+        {
+            DateTime now = DateTime.UtcNow;
+            bool rawCongestion =
+                vehicleCount >= 3;
+
+            // 긴급차량은 즉시 확정하고, 일시적으로 검출이 끊겨도
+            // 마지막 감지 후 3초 동안 긴급 상태를 유지한다.
+            if (ambulanceDetected)
+                _lastAmbulanceDetectedAt = now;
+
+            bool emergencyActive =
+                ambulanceDetected ||
+                (_lastAmbulanceDetectedAt != DateTime.MinValue &&
+                 now - _lastAmbulanceDetectedAt < EmergencyHoldDuration);
+
+            // 혼잡 진입과 해제에 서로 다른 유지시간을 적용한다.
+            // 경계값에서 차량 수가 2↔3으로 흔들려도 신호가 즉시 바뀌지 않는다.
+            if (rawCongestion == _stableCongestion)
+            {
+                _congestionCandidateSince = DateTime.MinValue;
+                _pendingCongestionState = rawCongestion;
+            }
+            else
+            {
+                if (_congestionCandidateSince == DateTime.MinValue ||
+                    _pendingCongestionState != rawCongestion)
+                {
+                    _pendingCongestionState = rawCongestion;
+                    _congestionCandidateSince = now;
+                }
+
+                TimeSpan requiredDuration = rawCongestion
+                    ? CongestionEnterDelay
+                    : CongestionExitDelay;
+
+                if (now - _congestionCandidateSince >= requiredDuration)
+                {
+                    _stableCongestion = rawCongestion;
+                    _congestionCandidateSince = DateTime.MinValue;
+                }
+            }
+
+            SignalState desiredSignal;
+
+            if (emergencyActive)
+            {
+                TrafficStatus = "긴급";
+                TrafficStatusColor = Brushes.Red;
+                SignalChangeReason = ambulanceDetected
+                    ? "긴급차량 우선"
+                    : "긴급 신호 3초 유지";
+                desiredSignal = SignalState.Green;
+            }
+            else if (_stableCongestion)
+            {
+                TrafficStatus = "혼잡";
+                TrafficStatusColor = Brushes.Red;
+                SignalChangeReason = "ROI 차량 3대 이상";
+                desiredSignal = SignalState.Green;
+            }
+            else
+            {
+                TrafficStatus = "정상";
+                TrafficStatusColor = Brushes.Green;
+                SignalChangeReason = "기본 정지 신호";
+                desiredSignal = SignalState.Red;
+            }
+
+            _desiredAutomaticSignal = desiredSignal;
+
+            if (IsAutoControlEnabled)
+                QueueAutomaticSignal(desiredSignal);
+        }
+
+        private async void QueueAutomaticSignal(
+            SignalState desiredSignal)
+        {
+            _desiredAutomaticSignal = desiredSignal;
+
+            if (_automaticSendLoopRunning ||
+                !IsAutoControlEnabled)
+            {
+                return;
+            }
+
+            _automaticSendLoopRunning = true;
+
+            try
+            {
+                while (IsAutoControlEnabled)
+                {
+                    SignalState signalToSend =
+                        _desiredAutomaticSignal;
+
+                    await SendSignalWithTransitionAsync(
+                        signalToSend,
+                        "ROI 자동 제어",
+                        true
+                    );
+
+                    if (signalToSend ==
+                        _desiredAutomaticSignal)
+                    {
+                        break;
+                    }
+                }
+            }
+            finally
+            {
+                _automaticSendLoopRunning = false;
+            }
+        }
+
+        private async Task SendSignalWithTransitionAsync(
+            SignalState state,
+            string reason,
+            bool isAutomatic)
+        {
+            string targetCommand = ToDisplayCommand(state);
+            bool requiresYellowTransition =
+                (state == SignalState.Red ||
+                 state == SignalState.Green) &&
+                LastEsp32Command != targetCommand &&
+                LastEsp32Command != "YELLOW";
+
+            if (requiresYellowTransition)
+            {
+                await SendSignalAndUpdateUiAsync(
+                    SignalState.Yellow,
+                    reason + " 전환 대기"
+                );
+
+                await Task.Delay(2000);
+
+                // 전환 대기 중 ROI 결과가 바뀌었다면 오래된 목표 신호를
+                // 보내지 않고 자동 전송 루프가 최신 상태를 처리하게 한다.
+                if (isAutomatic &&
+                    (!IsAutoControlEnabled ||
+                     state != _desiredAutomaticSignal))
+                {
+                    return;
+                }
+            }
+
+            await SendSignalAndUpdateUiAsync(state, reason);
+        }
+
+        private async Task SendSignalAndUpdateUiAsync(
+            SignalState state,
+            string reason)
+        {
+            IsEsp32Busy = true;
+            Esp32Status = "명령 전송 중";
+            Esp32StatusColor = Brushes.Orange;
+
+            try
+            {
+                Esp32CommandResult result =
+                    await _esp32SignalService.SendSignalAsync(state);
+
+                UpdateEsp32ConnectionState(result);
+
+                if (!result.Success)
+                {
+                    AddEventLog("ESP32 ERROR", result.Message);
+                    return;
+                }
+
+                string command =
+                    ToDisplayCommand(state);
+
+                LastEsp32Command = command;
+                SignalStatus = command;
+                SignalStatusColor = ToSignalColor(state);
+
+                if (result.WasSent)
+                {
+                    AddEventLog(
+                        "SIGNAL",
+                        reason + " → " + command
+                    );
+                }
+            }
+            finally
+            {
+                IsEsp32Busy = false;
+            }
+        }
+
+        private void UpdateEsp32ConnectionState(
+            Esp32CommandResult result)
+        {
+            Esp32Status =
+                result.Success ? "연결됨" : "연결 실패";
+
+            Esp32StatusColor =
+                result.Success ? Brushes.Green : Brushes.Red;
+        }
+
+        private void AddEventLog(
+            string type,
+            string message)
+        {
+            EventLogs.Insert(
+                0,
+                new EventLogItem
+                {
+                    Time = DateTime.Now.ToString("HH:mm:ss"),
+                    Type = type,
+                    Message = message
+                }
+            );
+
+            while (EventLogs.Count > 200)
+                EventLogs.RemoveAt(EventLogs.Count - 1);
+        }
+
+        private static string ToDisplayCommand(
+            SignalState state)
+        {
+            switch (state)
+            {
+                case SignalState.Red:
+                    return "RED";
+                case SignalState.Yellow:
+                    return "YELLOW";
+                case SignalState.Green:
+                    return "GREEN";
+                case SignalState.Off:
+                    return "OFF";
+                default:
+                    return state.ToString().ToUpperInvariant();
+            }
+        }
+
+        private static Brush ToSignalColor(
+            SignalState state)
+        {
+            switch (state)
+            {
+                case SignalState.Green:
+                    return Brushes.Green;
+                case SignalState.Yellow:
+                    return Brushes.Gold;
+                case SignalState.Off:
+                    return Brushes.Gray;
+                default:
+                    return Brushes.Red;
+            }
         }
 
 
@@ -1013,6 +1361,11 @@ namespace SmartTrafficDashboard.ViewModels
             ambulanceDetected
         );
 
+        UpdateTrafficAndQueueSignal(
+            vehicleCount,
+            ambulanceDetected
+        );
+
 
         // FPS 계산
         _fpsFrameCount++;
@@ -1253,6 +1606,16 @@ namespace SmartTrafficDashboard.ViewModels
             );
         }
 
+        public Brush TrafficStatusColor
+        {
+            get => _trafficStatusColor;
+
+            set => SetProperty(
+                ref _trafficStatusColor,
+                value
+            );
+        }
+
 
         public string SignalStatus
         {
@@ -1317,6 +1680,42 @@ namespace SmartTrafficDashboard.ViewModels
                 ref _signalChangeReason,
                 value
             );
+        }
+
+        public string Esp32Status
+        {
+            get => _esp32Status;
+            set => SetProperty(ref _esp32Status, value);
+        }
+
+        public Brush Esp32StatusColor
+        {
+            get => _esp32StatusColor;
+            set => SetProperty(ref _esp32StatusColor, value);
+        }
+
+        public string LastEsp32Command
+        {
+            get => _lastEsp32Command;
+            set => SetProperty(ref _lastEsp32Command, value);
+        }
+
+        public string ControlMode
+        {
+            get => _controlMode;
+            set => SetProperty(ref _controlMode, value);
+        }
+
+        public bool IsAutoControlEnabled
+        {
+            get => _isAutoControlEnabled;
+            set => SetProperty(ref _isAutoControlEnabled, value);
+        }
+
+        public bool IsEsp32Busy
+        {
+            get => _isEsp32Busy;
+            set => SetProperty(ref _isEsp32Busy, value);
         }
 
 

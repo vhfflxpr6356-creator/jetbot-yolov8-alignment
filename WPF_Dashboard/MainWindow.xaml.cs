@@ -7,6 +7,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
+using SmartTrafficDashboard.Models;
 
 namespace SmartTrafficDashboard
 {
@@ -38,6 +39,36 @@ namespace SmartTrafficDashboard
             _viewModel = new MainViewModel();
 
             DataContext = _viewModel;
+        }
+
+        private async void CheckEsp32_Click(object sender, RoutedEventArgs e)
+        {
+            await _viewModel.CheckEsp32ConnectionAsync();
+        }
+
+        private void AutoSignal_Click(object sender, RoutedEventArgs e)
+        {
+            _viewModel.EnableAutomaticControl();
+        }
+
+        private async void RedSignal_Click(object sender, RoutedEventArgs e)
+        {
+            await _viewModel.SendManualSignalAsync(SignalState.Red);
+        }
+
+        private async void YellowSignal_Click(object sender, RoutedEventArgs e)
+        {
+            await _viewModel.SendManualSignalAsync(SignalState.Yellow);
+        }
+
+        private async void GreenSignal_Click(object sender, RoutedEventArgs e)
+        {
+            await _viewModel.SendManualSignalAsync(SignalState.Green);
+        }
+
+        private async void OffSignal_Click(object sender, RoutedEventArgs e)
+        {
+            await _viewModel.SendManualSignalAsync(SignalState.Off);
         }
 
 

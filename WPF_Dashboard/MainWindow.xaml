@@ -36,6 +36,18 @@
             <Setter Property="FontSize" Value="13"/>
         </Style>
 
+        <Style x:Key="SignalButton" TargetType="Button">
+            <Setter Property="Height" Value="25"/>
+            <Setter Property="MinWidth" Value="42"/>
+            <Setter Property="Padding" Value="7,0"/>
+            <Setter Property="Margin" Value="4,0,0,0"/>
+            <Setter Property="FontSize" Value="10"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Background" Value="#F8F8F6"/>
+            <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
+            <Setter Property="Foreground" Value="{StaticResource Dark}"/>
+        </Style>
+
     </Window.Resources>
 
 
@@ -411,7 +423,7 @@
 
                                     <Ellipse Width="9"
                  Height="9"
-                 Fill="#81878C"
+                 Fill="{Binding TrafficStatusColor}"
                  Margin="0,0,8,0"
                  VerticalAlignment="Center"/>
 
@@ -596,11 +608,35 @@
                                    VerticalAlignment="Center"
                                    Style="{StaticResource TitleText}"/>
 
-                        <TextBlock Text="최근 이벤트"
-                                   HorizontalAlignment="Right"
-                                   VerticalAlignment="Center"
-                                   FontSize="10"
-                                   Foreground="{StaticResource Text2}"/>
+                        <StackPanel HorizontalAlignment="Right"
+                                    VerticalAlignment="Center"
+                                    Orientation="Horizontal">
+                            <Ellipse Width="7" Height="7"
+                                     Fill="{Binding Esp32StatusColor}"
+                                     VerticalAlignment="Center"/>
+                            <TextBlock Text="{Binding Esp32Status}"
+                                       Margin="5,0,8,0"
+                                       VerticalAlignment="Center"
+                                       FontSize="10"
+                                       Foreground="{StaticResource Text2}"/>
+                            <TextBlock Text="{Binding ControlMode}"
+                                       Margin="0,0,8,0"
+                                       VerticalAlignment="Center"
+                                       FontSize="10"
+                                       FontWeight="Bold"
+                                       Foreground="{StaticResource Dark}"/>
+                            <TextBlock Text="{Binding LastEsp32Command, StringFormat=LAST: {0}}"
+                                       Margin="0,0,6,0"
+                                       VerticalAlignment="Center"
+                                       FontSize="10"
+                                       Foreground="{StaticResource Text2}"/>
+                            <Button Content="연결 확인" Style="{StaticResource SignalButton}" Click="CheckEsp32_Click"/>
+                            <Button Content="AUTO" Style="{StaticResource SignalButton}" Click="AutoSignal_Click"/>
+                            <Button Content="RED" Style="{StaticResource SignalButton}" Click="RedSignal_Click"/>
+                            <Button Content="YELLOW" Style="{StaticResource SignalButton}" Click="YellowSignal_Click"/>
+                            <Button Content="GREEN" Style="{StaticResource SignalButton}" Click="GreenSignal_Click"/>
+                            <Button Content="OFF" Style="{StaticResource SignalButton}" Click="OffSignal_Click"/>
+                        </StackPanel>
 
                     </Grid>
 
